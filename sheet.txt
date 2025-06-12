@@ -1,0 +1,134 @@
+function processScheduledReminders() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Appointments");
+  const data = sheet.getDataRange().getValues();
+  const now = new Date();
+
+  for (let row = 1; row < data.length; row++) {
+    const appointmentDateRaw = data[row][0]; // Column A
+    const reminderStatus = (data[row][7] || "").toString().toLowerCase(); // Column H
+
+    // 🚫 Stop completely if appointment date is empty → assume end of data
+    if (!appointmentDateRaw) break;
+
+    // ✅ Skip if reminder is already sent or scheduled
+    if (reminderStatus === "yes" || reminderStatus === "scheduled") continue;
+
+    const appointmentDate = new Date(appointmentDateRaw);
+const reminderTime = new Date(appointmentDate.getTime() - 2 * 60 * 1000); // 1 hour before
+
+    if (reminderTime < now) {
+      Logger.log(`⏩ Skipping row ${row + 1}: reminder time has already passed.`);
+      continue;
+    }
+
+    Logger.log(`📆 Scheduling WhatsApp reminder for row ${row + 1} at ${reminderTime}`);
+
+    try {
+      const trigger = ScriptApp.newTrigger("sendWhatsappReminder")
+        .timeBased()
+        .at(reminderTime)
+        .create();
+
+      // 🧠 Save row number so the trigger knows which row to send
+      PropertiesService.getScriptProperties().setProperty(trigger.getUniqueId(), row + 1);
+
+      // ✅ Mark this row as scheduled so it's not scheduled again
+      sheet.getRange(row + 1, 8).setValue("Scheduled");
+
+    } catch (err) {
+      Logger.log(`❌ Failed to create trigger for row ${row + 1}: ${err}`);
+    }
+  }
+}
+
+
+
+
+function sendWhatsappReminder(e) {
+  const triggerId = e.triggerUid;
+  const row = parseInt(PropertiesService.getScriptProperties().getProperty(triggerId), 10);
+  if (!row) return;
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Appointments");
+
+  const appointmentDate = sheet.getRange(row, 1).getDisplayValue(); // A
+  const timezone        = sheet.getRange(row, 3).getValue();         // C
+  const name            = sheet.getRange(row, 4).getValue();         // D
+    const phone = sheet.getRange(row, 5).getDisplayValue(); // always a string
+  const email           = sheet.getRange(row, 6).getValue();         // F
+  const topic           = sheet.getRange(row, 7).getValue();         // G
+
+  const payload = {
+    row: row,
+    name: name,
+    phone: phone,
+    email: email,
+    appointmentDate: appointmentDate,
+    timezone: timezone,
+    topic: topic
+  };
+
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload)
+  };
+
+  const webhookUrl = "youe webhook url";
+
+  try {
+    const response = UrlFetchApp.fetch(webhookUrl, options);
+    Logger.log(`✅ Webhook sent successfully for row ${row}: ` + response.getContentText());
+    sheet.getRange(row, 8).setValue("Yes");
+  } catch (error) {
+    Logger.log(`❌ Failed to send webhook for row ${row}: ${error}`);
+  }
+
+  // Clean up the trigger
+  const triggers = ScriptApp.getProjectTriggers();
+  for (const trigger of triggers) {
+    if (trigger.getUniqueId() === triggerId) {
+      ScriptApp.deleteTrigger(trigger);
+      PropertiesService.getScriptProperties().deleteProperty(triggerId);
+      Logger.log(`🧹 Cleaned up trigger for row ${row}`);
+      break;
+    }
+  }
+}
+  
+
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+
+  ui.createMenu("⚙️ Custom Setup")
+    .addItem("Authorize", "authorizeSheet")
+    .addItem("Install", "installTrigger")
+    .addToUi();
+}
+
+function authorizeSheet() {
+  // Dummy function to force authorization
+  SpreadsheetApp.getActiveSpreadsheet();
+  Logger.log("Authorization triggered");
+  SpreadsheetApp.getUi().alert("Authorization completed. You can now click on install.");
+}
+
+function installTrigger() {
+  // Delete existing trigger if already installed to avoid duplicates
+  const triggers = ScriptApp.getProjectTriggers();
+  for (let t of triggers) {
+    if (t.getHandlerFunction() === "processScheduledReminders") {
+      ScriptApp.deleteTrigger(t);
+    }
+  }
+
+  // Install time-based trigger to run every minute
+  ScriptApp.newTrigger("processScheduledReminders")
+    .timeBased()
+    .everyMinutes(1)
+    .create();
+
+  SpreadsheetApp.getUi().alert("Installation successful!");
+}
+
+
